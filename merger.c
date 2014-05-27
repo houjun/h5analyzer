@@ -52,7 +52,7 @@ typedef struct selection_info {
     
     //Dataset_info*  datasetinfo_ptr;
 
-    char        name[FILE_PATH_LEN];    // including /path/to/file/
+    char        name[FILE_PATH_LEN];    // /path/to/file/dataset_name
 
     // KEY: return value of H5Dget_space() & parameter of H5Sselect_*
     uint64_t    space_id;
@@ -94,7 +94,7 @@ typedef struct h5dread {
 
 } H5dread;
 
-H5dread* read = NULL;
+H5dread* read[MAX_DATASET_PER_LOG];
 
 int parse_create(char* line, Dataset_info* datasetinfo)
 {
@@ -487,7 +487,7 @@ int print_selectioninfo(Selection_info* selectioninfo, int num)
         else {
             // hyperslab
 
-            printf(" hyperslab %s, {", selectioninfo[i].name);
+            printf("hyperslab {");
 
             dim = selectioninfo[i].dim;
             for(j = 0; j < dim; j++) {
@@ -593,13 +593,25 @@ int parse_read(char* line, Selection_info* selectioninfo)
     for(i = cur_selectionid - 1; i >=0; i--) {
 
         if(tmp_read->file_space_id == selectioninfo[i].space_id) {
-            memcpy(&tmp_read->selection_info, &selectioninfo[i], sizeof(read->selection_info));
+            memcpy(&tmp_read->selection_info, &selectioninfo[i], sizeof(tmp_read->selection_info));
             break;
         }
 
     }
 
-    DL_APPEND(read, tmp_read);
+    for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
+        if(read[i] != NULL) {
+            if( strcmp(read[i]->selection_info.name, tmp_read->selection_info.name) == 0 ) {
+                DL_APPEND(read[i], tmp_read);
+                break;
+            }
+        }
+        else {
+
+            DL_APPEND(read[i], tmp_read);
+            break;
+        }
+    }
 
     return 0;
 }
@@ -611,10 +623,28 @@ void print_read()
     int i;
     H5dread* elt;
 
-    DL_FOREACH(read,elt){
-        print_selectioninfo(&(elt->selection_info), 1);
-        printf("\t %f\n", elt->read_time);
+    for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
+        if(read[i] == NULL)
+            break;
+
+        printf("\n%s\n", read[i]->selection_info.name);
+        DL_FOREACH(read[i],elt){
+            if(elt == NULL)
+                break;
+            print_selectioninfo(&(elt->selection_info), 1);
+            printf("\t\t%f\n", elt->read_time);
+        }
     }
+
+}
+
+int cmp_read(H5dread* a, H5dread* b)
+{
+
+    if(a->selection_info.start[0] == b->selection_info.start[0])
+        return 0;
+    else
+        return a->selection_info.start[0] < b->selection_info.start[0] ? -1 : 1;
 
 }
 
@@ -648,9 +678,9 @@ int read_log_from_file(char *filepath, int num_file)
         validgetspace   = 0;
 
         // print progress
-        sprintf(filename, "%s/log.%d", filepath, i);
         printf("Processing %s\n", filename);
 
+        sprintf(filename, "%s/log.%d", filepath, i);
 
         FILE *fp = fopen(filename, "r");
         if (fp == NULL) {
@@ -701,6 +731,9 @@ int read_log_from_file(char *filepath, int num_file)
 
     // HTEST: print all parsed info from one file (proc)
     printf("Read accesses:\n");
+    for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
+        DL_SORT(read[i], cmp_read);
+    }
     print_read(read);
     printf("\n");
     
@@ -714,13 +747,26 @@ int read_log_from_file(char *filepath, int num_file)
     return 0;
 }
 
+void init_read()
+{
+    int i;
+    for(i = 0; i < MAX_DATASET_PER_LOG; i++)
+        read[i] = NULL;
+
+}
+
 void free_read()
 {
+    int i;
     H5dread* elt;
     H5dread* tmp;
 
-    DL_FOREACH_SAFE(read,elt,tmp) {
-        DL_DELETE(read, elt);
+    for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
+        if(read[i] == NULL)
+            break;
+        DL_FOREACH_SAFE(read[i],elt,tmp) {
+            DL_DELETE(read[i], elt);
+        }
     }
 }
 
