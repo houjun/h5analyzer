@@ -3,6 +3,8 @@
 #include <string.h>
 #include <stdint.h>
 
+#include "utlist.h"
+
 #define MAX_DIM                 8
 #define OP_NAME_LEN             64
 #define FILE_PATH_LEN           128
@@ -10,16 +12,15 @@
 #define MAX_FILE_PER_LOG        256 
 #define MAX_DATASET_PER_LOG     256 
 #define MAX_SELECTION_PER_LOG   2048
-#define MAX_READ_PER_LOG        2048
 
 int cur_fileid;
 int cur_datasetid;                      // current datasetID opened by H5Dopen* for current log
 int cur_selectionid;                    // current selectionID for current log
-int cur_readid;                         
 
 int validselect;                        // H5Sselect_* is parsed only when previous H5Dget_space is 
                                         // valid (when it is reading)
 int validgetspace;                                        
+
 
 typedef struct file_info {
     int         valid;
@@ -46,11 +47,12 @@ typedef struct dataset_info {
 
 } Dataset_info;
 
-// each H5Dopen* will create a Selection_info struct
-// the other info will be added with H5Dget_space and H5Sselect_*
+// each H5Dget_space* will create a Selection_info struct
 typedef struct selection_info {
     
-    Dataset_info*  datasetinfo_ptr;
+    //Dataset_info*  datasetinfo_ptr;
+
+    char        name[FILE_PATH_LEN];    // including /path/to/file/
 
     // KEY: return value of H5Dget_space() & parameter of H5Sselect_*
     uint64_t    space_id;
@@ -76,6 +78,7 @@ typedef struct selection_info {
 
 
 typedef struct h5dread {
+
     double      walltime;
     uint64_t    dataset_id;
     char        mem_type_id[OP_NAME_LEN];
@@ -84,8 +87,14 @@ typedef struct h5dread {
     uint64_t    xfer_plist_id;
     double      read_time;
 
-    Selection_info* selection_ptr;
+    Selection_info selection_info;
+
+    struct h5dread *prev;
+    struct h5dread *next;
+
 } H5dread;
+
+H5dread* read = NULL;
 
 int parse_create(char* line, Dataset_info* datasetinfo)
 {
@@ -307,7 +316,7 @@ int parse_get_space(char* line, Selection_info* selectioninfo, Dataset_info* dat
         return -1;
 
 
-    selectioninfo[id].datasetinfo_ptr = &datasetinfo[i];
+    strcpy(selectioninfo[id].name, datasetinfo[i].name);
 
 
     pch = strtok(NULL, " ");
@@ -478,8 +487,7 @@ int print_selectioninfo(Selection_info* selectioninfo, int num)
         else {
             // hyperslab
 
-            printf(" hyperslab %s, {", selectioninfo[i].datasetinfo_ptr->name);
-            //printf("%f hyperslab %s, {", selectioninfo[i].walltime, selectioninfo[i].datasetinfo_ptr->name);
+            printf(" hyperslab %s, {", selectioninfo[i].name);
 
             dim = selectioninfo[i].dim;
             for(j = 0; j < dim; j++) {
@@ -520,7 +528,7 @@ int print_selectioninfo(Selection_info* selectioninfo, int num)
     return 0;
 }
 
-int parse_read(char* line, H5dread* read, Selection_info* selectioninfo)
+int parse_read(char* line, Selection_info* selectioninfo)
 {
     // H5dread format
     // 1400542754.21204 H5dread 
@@ -531,9 +539,16 @@ int parse_read(char* line, H5dread* read, Selection_info* selectioninfo)
     char* pend; // for strtoull
     char tmp_char[LINE_MAX_LEN];
 
+    H5dread* tmp_read = (H5dread*)malloc(sizeof(H5dread));
+    if(tmp_read == NULL){
+        printf("Unable to allocate space for read records!\nExiting...\n");
+        exit(-1);
+    }
+
+
     // walltime
     pch = strtok(line, " ");
-    read->walltime = atof(pch);
+    tmp_read->walltime = atof(pch);
 
     // op (no use)
     pch = strtok(NULL, " ");
@@ -542,23 +557,23 @@ int parse_read(char* line, H5dread* read, Selection_info* selectioninfo)
     // dataset_id
     pch = strtok(NULL, ",");
     pch++;      // skip "("
-    read->dataset_id = strtoull(pch, &pend ,10);
+    tmp_read->dataset_id = strtoull(pch, &pend ,10);
 
     // mem_type_id
     pch = strtok(NULL, ",");
-    strcpy(read->mem_type_id, pch);
+    strcpy(tmp_read->mem_type_id, pch);
 
     // mem_space_id
     pch = strtok(NULL, ",");
-    read->mem_space_id = strtoull(pch, &pend ,10);
+    tmp_read->mem_space_id = strtoull(pch, &pend ,10);
 
     // file_space_id
     pch = strtok(NULL, ",");
-    read->file_space_id = strtoull(pch, &pend ,10);
+    tmp_read->file_space_id = strtoull(pch, &pend ,10);
 
     // xfer_plist_id
     pch = strtok(NULL, ",");
-    read->xfer_plist_id = strtoull(pch, &pend ,10);
+    tmp_read->xfer_plist_id = strtoull(pch, &pend ,10);
 
 
     // buf (no use)
@@ -571,46 +586,48 @@ int parse_read(char* line, H5dread* read, Selection_info* selectioninfo)
     pch = strtok(NULL, "\n");
     
     // read_time
-    read->read_time = atof(pch);
+    tmp_read->read_time = atof(pch);
 
 
     int i;
     for(i = cur_selectionid - 1; i >=0; i--) {
 
-        if(read->file_space_id == selectioninfo[i].space_id) {
-            read->selection_ptr = &selectioninfo[i];
+        if(tmp_read->file_space_id == selectioninfo[i].space_id) {
+            memcpy(&tmp_read->selection_info, &selectioninfo[i], sizeof(read->selection_info));
             break;
         }
 
     }
 
+    DL_APPEND(read, tmp_read);
+
     return 0;
 }
 
 
-void print_read(H5dread* read, int num)
+void print_read()
 {
 
     int i;
+    H5dread* elt;
 
-    for(i = 0; i < num; i++) {
-//        printf("READ: %f", read[i].walltime);
-        print_selectioninfo(read[i].selection_ptr, 1);
-        printf("\t %f\n", read[i].read_time);
+    DL_FOREACH(read,elt){
+        print_selectioninfo(&(elt->selection_info), 1);
+        printf("\t %f\n", elt->read_time);
     }
 
 }
 
 int read_log_from_file(char *filepath, int num_file)
 {
-    int i, read_count;
+    int i;
     char filename[FILE_PATH_LEN];
     char tmp_line[LINE_MAX_LEN];
 
     File_info*         fileinfo;
     Dataset_info*      datasetinfo;
     Selection_info*    selectioninfo;
-    H5dread*           read;
+
     
     // init fileinfo struct array
     fileinfo = malloc(sizeof(File_info) * MAX_FILE_PER_LOG);
@@ -621,25 +638,15 @@ int read_log_from_file(char *filepath, int num_file)
     // init selectioninfo struct array
     selectioninfo = malloc(sizeof(Selection_info) * MAX_SELECTION_PER_LOG);
 
-    // init H5dread struct array
-    read = malloc(sizeof(H5dread) * MAX_READ_PER_LOG);
-    
-
-    cur_readid = 0;
-
+    cur_fileid      = 0;
+    cur_datasetid   = 0;
+    cur_selectionid = 0;
 
     // iterate all files
     for(i = 0; i < num_file; i++) {
         validselect     = 0;
         validgetspace   = 0;
 
-        cur_fileid      = 0;
-        cur_datasetid   = 0;
-        cur_selectionid = 0;
-        // cur_readid shouldn't be cleared.
-
-        read_count = 0;
-       
         // print progress
         sprintf(filename, "%s/log.%d", filepath, i);
         printf("Processing %s\n", filename);
@@ -677,7 +684,7 @@ int read_log_from_file(char *filepath, int num_file)
             }
             else if((strstr(tmp_line, "H5Dread") != NULL)) {
 
-                parse_read(tmp_line, &read[read_count++], selectioninfo);
+                parse_read(tmp_line,selectioninfo);
 
             }
             else if((strstr(tmp_line, "H5Fclose") != NULL)) {
@@ -687,24 +694,34 @@ int read_log_from_file(char *filepath, int num_file)
             }
 
         } // within a log file
-    
-        // HTEST: print all parsed info from one file (proc)
-        printf("Read accesses:\n");
-        print_read(read, read_count);
-        printf("\n");
-        
+       
         fclose(fp);
-    
     } // end reading from one log file
+ 
+
+    // HTEST: print all parsed info from one file (proc)
+    printf("Read accesses:\n");
+    print_read(read);
+    printf("\n");
+    
 
     
     // garbage collection
     free(fileinfo);
     free(datasetinfo);
     free(selectioninfo);
-    free(read);
 
     return 0;
+}
+
+void free_read()
+{
+    H5dread* elt;
+    H5dread* tmp;
+
+    DL_FOREACH_SAFE(read,elt,tmp) {
+        DL_DELETE(read, elt);
+    }
 }
 
 void print_usage()
@@ -719,6 +736,8 @@ int main(int argc, char* argv[])
     char *filepath;
     int num_file;
     int i, j, k;
+
+
 
     // argc check
     if(argc != 3) {
@@ -736,6 +755,7 @@ int main(int argc, char* argv[])
     read_log_from_file(filepath, num_file);
 
 
+    free_read();
 
     return 0;
 }
