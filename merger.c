@@ -89,12 +89,18 @@ typedef struct h5dread {
 
     Selection_info selection_info;
 
+
+    int         merged;
+    int         repeat_time;
+
     struct h5dread *prev;
     struct h5dread *next;
 
 } H5dread;
 
 H5dread* read[MAX_DATASET_PER_LOG];
+
+H5dread* pattern[MAX_DATASET_PER_LOG];
 
 int parse_create(char* line, Dataset_info* datasetinfo)
 {
@@ -341,7 +347,7 @@ int parse_hyperslab(char* line, Selection_info* selectioninfo)
     //      {1835008,...},{32768,...},{1,...},{32768, ...}) 0 0.00000
 
 
-    int i, dim;
+    int i, j, dim;
     char* pch;  // parsed token
     char* pend; // for strtoull
     char tmp_char[LINE_MAX_LEN];
@@ -413,16 +419,13 @@ int parse_hyperslab(char* line, Selection_info* selectioninfo)
     }
     pch = strtok(NULL, "}");
 
-    // HTEST
-    if(selectioninfo[match_id].start[i-1] == 4161536)
-        i = 0;
-
     // stride
     for(i = 0; i < dim; i++) {
         // deal with NULL
         if(strcmp(pch, "NULL") == 0) {
-            selectioninfo[match_id].stride[i] = 1;
-            continue;
+            for(j = i; j < dim; j++)
+                selectioninfo[match_id].stride[j] = 1;
+            break;
         }
         if(i == 0)
             selectioninfo[match_id].stride[i] = strtoull(pch, &pend ,10);
@@ -455,7 +458,8 @@ int parse_hyperslab(char* line, Selection_info* selectioninfo)
     for(i = 0; i < dim; i++) {
         // deal with NULL
         if(strcmp(pch, "NULL") == 0) {
-            selectioninfo[match_id].block[i] = 1;
+            for(j = i; j < dim; j++)
+                selectioninfo[match_id].block[j] = 1;
             continue;
         }
         if(i == 0)
@@ -466,6 +470,8 @@ int parse_hyperslab(char* line, Selection_info* selectioninfo)
             selectioninfo[match_id].block[i] = strtoull(pend, &pend ,10);
         }
     }
+
+    selectioninfo[match_id].select_type = 'H';
 
     pch =  NULL;
     pend = NULL;
@@ -616,7 +622,6 @@ int parse_read(char* line, Selection_info* selectioninfo)
     return 0;
 }
 
-
 void print_read()
 {
 
@@ -638,6 +643,29 @@ void print_read()
 
 }
 
+void print_pattern()
+{
+
+    int i;
+    H5dread* elt;
+
+    printf("Read accesses:");
+    for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
+        if(pattern[i] == NULL)
+            break;
+
+        printf("\n\n%s\n", pattern[i]->selection_info.name);
+        DL_FOREACH(pattern[i],elt){
+            if(elt == NULL)
+                break;
+            print_selectioninfo(&(elt->selection_info), 1);
+            printf("\t\t%f \t %d", elt->read_time, elt->repeat_time);
+        }
+
+    }
+
+}
+
 int cmp_read(H5dread* a, H5dread* b)
 {
 
@@ -647,6 +675,198 @@ int cmp_read(H5dread* a, H5dread* b)
         return a->selection_info.start[0] < b->selection_info.start[0] ? -1 : 1;
 
 }
+
+
+int merge_read()
+{
+    int i, j, k, dim, checkmark, flag;
+    H5dread* elt;
+    H5dread* elt_n;
+    H5dread* elt_r;
+
+    H5dread* tmp;
+
+    for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
+    // within one dataset
+    
+        elt = read[i];
+
+        while(elt != NULL) {
+            if(elt->merged == 1) {
+                elt = elt->next;
+                continue;
+            }
+
+            tmp = (H5dread*)malloc(sizeof(H5dread));
+            memcpy(tmp, elt, sizeof(H5dread));
+
+            tmp->prev = NULL;
+            tmp->next = NULL;
+            tmp->repeat_time = 1;
+            
+
+            elt_n = elt->next;
+
+            dim = tmp->selection_info.dim;
+
+            // merge as many subsequent accesses as possible
+            checkmark = 0;
+
+            while(elt_n != NULL){
+
+                if(checkmark >= dim )
+                    break;
+               
+                if( elt_n->merged == 1) {
+                    elt_n = elt_n->next;
+                    continue;
+                }
+
+                // check for each dimension
+                for(j = 0; j < dim; j++) {
+                    
+                    if(elt_n->selection_info.start[j] > (tmp->selection_info.start[j] + tmp->selection_info.block[j]*tmp->selection_info.count[j]) )
+                        checkmark++;
+                    else if(elt_n->selection_info.start[j] == (tmp->selection_info.start[j] + tmp->selection_info.block[j]*tmp->selection_info.count[j])) {
+
+                        // merge when only one dimension is extendable while the other are the same
+                        flag = 0;
+                        for(k = 0; k < dim; k++) {
+                            if(k == j)
+                                continue;
+
+                            if(elt_n->selection_info.start[j] != tmp->selection_info.start[j] || elt_n->selection_info.stride[j] != tmp->selection_info.stride[j]
+                                    || elt_n->selection_info.block[j]*tmp->selection_info.count[j] != tmp->selection_info.block[j]*tmp->selection_info.count[j]) {
+                                flag = 1;
+                                break;
+                            }
+                        }
+
+                        if(flag == 0) {
+                            // can be merged
+                            if(tmp->selection_info.stride[j] > tmp->selection_info.block[j] + elt->selection_info.block[j] )
+                                tmp->selection_info.block[j] += elt_n->selection_info.block[j];
+                            else
+                                tmp->selection_info.count[j] += elt_n->selection_info.count[j];
+    
+                            tmp->read_time += elt_n->read_time;
+                            elt_n->merged = 1;
+                        }
+
+                        break;
+                    } // else if
+
+                } // for each dimension
+
+                elt_n = elt_n->next;
+
+            } // while elt_n
+
+        
+            // check for repeat
+            elt_r = pattern[i];
+            while(elt_r != NULL) {
+          
+                if(cmp_pattern(elt_r, tmp) == 1) {
+                    elt_r->repeat_time++;
+                    free(tmp);
+                    break;
+                }
+                elt_r = elt_r->next;
+            }
+
+            if(elt_r == NULL)
+                DL_APPEND(pattern[i], tmp);
+
+            elt = elt->next;
+
+        } // while elt = read[i]
+
+        
+
+    } // for all datasets
+
+    return 0;
+}
+
+int cmp_pattern(H5dread* x, H5dread* y)
+{
+    int dim, i;
+
+    Selection_info* a = &x->selection_info;
+    Selection_info* b = &y->selection_info;
+
+    if(a->dim != b->dim)
+        return 0;
+
+    dim = a->dim;
+
+    if(a->select_type != b->select_type) 
+        return 0;
+
+    if(a->select_type == 'H') {
+        for(i = 0; i < dim; i++) {
+            if( (a->start[i] != b->start[i]) || (a->stride[i] != b->stride[i]) ||
+                    (a->count[i] != b->count[i]) || (a->block[i] != b->block[i])) {
+
+                return 0;
+            }
+
+        }
+
+    }
+
+
+    return 1;
+
+}
+void init_read()
+{
+    int i;
+    for(i = 0; i < MAX_DATASET_PER_LOG; i++)
+        read[i] = NULL;
+
+}
+
+void free_read()
+{
+    int i;
+    H5dread* elt;
+    H5dread* tmp;
+
+    for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
+        if(read[i] == NULL)
+            break;
+        DL_FOREACH_SAFE(read[i],elt,tmp) {
+            DL_DELETE(read[i], elt);
+        }
+    }
+}
+
+
+void init_pattern()
+{
+    int i;
+    for(i = 0; i < MAX_DATASET_PER_LOG; i++)
+        pattern[i] = NULL;
+
+}
+
+void free_pattern()
+{
+    int i;
+    H5dread* elt;
+    H5dread* tmp;
+
+    for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
+        if(pattern[i] == NULL)
+            break;
+        DL_FOREACH_SAFE(pattern[i],elt,tmp) {
+            DL_DELETE(pattern[i], elt);
+        }
+    }
+}
+
 
 int read_log_from_file(char *filepath, int num_file)
 {
@@ -658,6 +878,8 @@ int read_log_from_file(char *filepath, int num_file)
     Dataset_info*      datasetinfo;
     Selection_info*    selectioninfo;
 
+    init_read();
+    init_pattern();
     
     // init fileinfo struct array
     fileinfo = malloc(sizeof(File_info) * MAX_FILE_PER_LOG);
@@ -730,11 +952,13 @@ int read_log_from_file(char *filepath, int num_file)
  
 
     // HTEST: print all parsed info from one file (proc)
-    printf("Read accesses:\n");
     for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
         DL_SORT(read[i], cmp_read);
     }
-    print_read(read);
+
+    merge_read();
+    print_pattern(read);
+    //print_read(read);
     printf("\n");
     
 
@@ -744,32 +968,10 @@ int read_log_from_file(char *filepath, int num_file)
     free(datasetinfo);
     free(selectioninfo);
 
+    free_read();
+    free_pattern();
     return 0;
 }
-
-void init_read()
-{
-    int i;
-    for(i = 0; i < MAX_DATASET_PER_LOG; i++)
-        read[i] = NULL;
-
-}
-
-void free_read()
-{
-    int i;
-    H5dread* elt;
-    H5dread* tmp;
-
-    for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
-        if(read[i] == NULL)
-            break;
-        DL_FOREACH_SAFE(read[i],elt,tmp) {
-            DL_DELETE(read[i], elt);
-        }
-    }
-}
-
 void print_usage()
 {
     printf("Usage:\n ./merger /path/to/file #file");
@@ -801,7 +1003,6 @@ int main(int argc, char* argv[])
     read_log_from_file(filepath, num_file);
 
 
-    free_read();
 
     return 0;
 }
