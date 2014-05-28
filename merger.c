@@ -8,9 +8,10 @@
 #define MAX_DIM                 8
 #define OP_NAME_LEN             64
 #define FILE_PATH_LEN           128
-#define LINE_MAX_LEN            256 
+#define LINE_MAX_LEN            256
 #define MAX_FILE_PER_LOG        256 
-#define MAX_DATASET_PER_LOG     256 
+#define MAX_DATASET_PER_LOG     256
+#define MAX_NUM_LOG             2048
 #define MAX_SELECTION_PER_LOG   2048
 
 int cur_fileid;
@@ -76,6 +77,11 @@ typedef struct selection_info {
 
 } Selection_info;
 
+typedef struct Pid_list {
+    int pid;
+    struct Pid_list* prev;
+    struct Pid_list* next;
+} Pid_list;
 
 typedef struct h5dread {
 
@@ -89,7 +95,10 @@ typedef struct h5dread {
 
     Selection_info selection_info;
 
+    int         pid;
 
+    // used for pattern
+    Pid_list*   pids;
     int         merged;
     int         repeat_time;
 
@@ -534,7 +543,7 @@ int print_selectioninfo(Selection_info* selectioninfo, int num)
     return 0;
 }
 
-int parse_read(char* line, Selection_info* selectioninfo)
+int parse_read(char* line, Selection_info* selectioninfo, int pid)
 {
     // H5dread format
     // 1400542754.21204 H5dread 
@@ -594,6 +603,7 @@ int parse_read(char* line, Selection_info* selectioninfo)
     // read_time
     tmp_read->read_time = atof(pch);
 
+    tmp_read->pid = pid;
 
     int i;
     for(i = cur_selectionid - 1; i >=0; i--) {
@@ -605,6 +615,7 @@ int parse_read(char* line, Selection_info* selectioninfo)
 
     }
 
+    // find the right place to append
     for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
         if(read[i] != NULL) {
             if( strcmp(read[i]->selection_info.name, tmp_read->selection_info.name) == 0 ) {
@@ -648,6 +659,7 @@ void print_pattern()
 
     int i;
     H5dread* elt;
+    Pid_list* pidlist;
 
     printf("Read accesses:");
     for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
@@ -659,7 +671,12 @@ void print_pattern()
             if(elt == NULL)
                 break;
             print_selectioninfo(&(elt->selection_info), 1);
-            printf("\t\t%f \t %d", elt->read_time, elt->repeat_time);
+            
+            // print pids
+            printf("\t proc:[");
+            DL_FOREACH(elt->pids, pidlist)
+                printf(" %d",pidlist->pid);
+            printf(" ]\t time:%f \t repeat: %d", elt->read_time, elt->repeat_time);
         }
 
     }
@@ -676,6 +693,16 @@ int cmp_read(H5dread* a, H5dread* b)
 
 }
 
+int cmp_pid(Pid_list* a, Pid_list* b)
+{
+    if(a->pid == b->pid)
+        return 0;
+    else
+        return 1;
+
+    return -1;
+}
+
 
 int merge_read()
 {
@@ -685,6 +712,9 @@ int merge_read()
     H5dread* elt_r;
 
     H5dread* tmp;
+
+    Pid_list* tmp_pid;
+    Pid_list* search_pid;
 
     for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
     // within one dataset
@@ -703,6 +733,11 @@ int merge_read()
             tmp->prev = NULL;
             tmp->next = NULL;
             tmp->repeat_time = 1;
+
+                            
+            tmp_pid = (Pid_list*)malloc(sizeof(Pid_list));
+            tmp_pid->pid = tmp->pid;
+            DL_APPEND(tmp->pids, tmp_pid);
             
 
             elt_n = elt->next;
@@ -750,6 +785,16 @@ int merge_read()
                                 tmp->selection_info.count[j] += elt_n->selection_info.count[j];
     
                             tmp->read_time += elt_n->read_time;
+
+                            tmp_pid = (Pid_list*)malloc(sizeof(Pid_list));
+                            tmp_pid->pid = elt_n->pid;
+
+                            DL_SEARCH(tmp->pids, search_pid, tmp_pid, cmp_pid);
+                            if(search_pid == NULL)
+                                DL_APPEND(tmp->pids, tmp_pid);
+                            else
+                                free(tmp_pid);
+
                             elt_n->merged = 1;
                         }
 
@@ -936,7 +981,7 @@ int read_log_from_file(char *filepath, int num_file)
             }
             else if((strstr(tmp_line, "H5Dread") != NULL)) {
 
-                parse_read(tmp_line,selectioninfo);
+                parse_read(tmp_line,selectioninfo, i);
 
             }
             else if((strstr(tmp_line, "H5Fclose") != NULL)) {
