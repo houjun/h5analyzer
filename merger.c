@@ -490,6 +490,107 @@ int parse_hyperslab(char* line, Selection_info* selectioninfo)
     return 0;
 }
 
+void print_read()
+{
+
+    int i;
+    H5dread* elt;
+
+    for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
+        if(read[i] == NULL)
+            break;
+
+        printf("\n%s\n", read[i]->selection_info.name);
+        DL_FOREACH(read[i],elt){
+            if(elt == NULL)
+                break;
+            print_selectioninfo(&(elt->selection_info), 1);
+            printf("\t\t%f\n", elt->read_time);
+        }
+    }
+
+}
+
+int get_stat(double* stat, int dataset_id)
+{
+
+    H5dread* elt;
+    int i, dim, count;
+    double min, max, mean, blk_size;
+
+    min   = 999999999999.0;
+    max   = 0.0;
+    mean  = 0.0;
+    count = 0;
+
+    DL_FOREACH(read[dataset_id],elt) {
+
+        dim = elt->selection_info.dim;
+        blk_size = 1.0;
+        for(i = 0; i< dim; i++) {
+            blk_size *= elt->selection_info.block[i];
+        }
+
+        if(blk_size > max)
+            max = blk_size;
+
+        if(blk_size < min)
+            min = blk_size;
+        
+        mean += blk_size;
+
+        count++;
+    }
+
+    mean /= count; 
+
+    stat[0] = min;
+    stat[1] = mean;
+    stat[2] = max;
+
+    return 0;
+
+}
+
+
+void print_pattern()
+{
+
+    int i;
+    double stat[3];
+    H5dread* elt;
+    Pid_list* pidlist;
+
+    printf("\nFile/dataset name\nSelector\tRegion\t\tInvolved processes\tTotal time\tRepeat time\t[Min, Mean, Max size (Byte)]:\n");
+
+    for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
+        if(pattern[i] == NULL)
+            break;
+
+        printf("\n%s\n", pattern[i]->selection_info.name);
+        DL_FOREACH(pattern[i],elt){
+            if(elt == NULL)
+                break;
+            print_selectioninfo(&(elt->selection_info), 1);
+            
+            // print pids
+            // sort first
+            DL_SORT(elt->pids, cmp_pid);
+            printf("\t [");
+            DL_FOREACH(elt->pids, pidlist)
+                printf(" %d",pidlist->pid);
+            printf(" ]\t %f \t %d", elt->read_time, elt->repeat_time);
+
+            // get max, min, mean
+            get_stat(stat, i);
+            printf("\t[%.1f %.1f %.1f]\n",stat[0], stat[1], stat[2]);
+        }
+    }
+
+
+}
+
+
 int print_selectioninfo(Selection_info* selectioninfo, int num)
 {
     int i, j, dim;
@@ -559,6 +660,7 @@ int parse_read(char* line, Selection_info* selectioninfo, int pid)
         printf("Unable to allocate space for read records!\nExiting...\n");
         exit(-1);
     }
+    memset(tmp_read, 0, sizeof(H5dread));
 
 
     // walltime
@@ -633,56 +735,6 @@ int parse_read(char* line, Selection_info* selectioninfo, int pid)
     return 0;
 }
 
-void print_read()
-{
-
-    int i;
-    H5dread* elt;
-
-    for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
-        if(read[i] == NULL)
-            break;
-
-        printf("\n%s\n", read[i]->selection_info.name);
-        DL_FOREACH(read[i],elt){
-            if(elt == NULL)
-                break;
-            print_selectioninfo(&(elt->selection_info), 1);
-            printf("\t\t%f\n", elt->read_time);
-        }
-    }
-
-}
-
-void print_pattern()
-{
-
-    int i;
-    H5dread* elt;
-    Pid_list* pidlist;
-
-    printf("Read accesses:");
-    for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
-        if(pattern[i] == NULL)
-            break;
-
-        printf("\n\n%s\n", pattern[i]->selection_info.name);
-        DL_FOREACH(pattern[i],elt){
-            if(elt == NULL)
-                break;
-            print_selectioninfo(&(elt->selection_info), 1);
-            
-            // print pids
-            printf("\t proc:[");
-            DL_FOREACH(elt->pids, pidlist)
-                printf(" %d",pidlist->pid);
-            printf(" ]\t time:%f \t repeat: %d", elt->read_time, elt->repeat_time);
-        }
-
-    }
-
-}
-
 int cmp_read(H5dread* a, H5dread* b)
 {
 
@@ -697,10 +749,12 @@ int cmp_pid(Pid_list* a, Pid_list* b)
 {
     if(a->pid == b->pid)
         return 0;
-    else
+    else if(a->pid > b->pid)
         return 1;
+    else
+        return -1;
 
-    return -1;
+    return 0;
 }
 
 
@@ -733,6 +787,7 @@ int merge_read()
             tmp->prev = NULL;
             tmp->next = NULL;
             tmp->repeat_time = 1;
+            tmp->merged = 0;
 
                             
             tmp_pid = (Pid_list*)malloc(sizeof(Pid_list));
@@ -884,6 +939,7 @@ void free_read()
             break;
         DL_FOREACH_SAFE(read[i],elt,tmp) {
             DL_DELETE(read[i], elt);
+            free(elt);
         }
     }
 }
@@ -902,12 +958,20 @@ void free_pattern()
     int i;
     H5dread* elt;
     H5dread* tmp;
+    Pid_list* pid_elt;
+    Pid_list* pid_tmp;
 
     for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
         if(pattern[i] == NULL)
             break;
         DL_FOREACH_SAFE(pattern[i],elt,tmp) {
+        
+            DL_FOREACH_SAFE(elt->pids, pid_elt,pid_tmp) {
+                DL_DELETE(elt->pids, pid_elt);
+                free(pid_elt);
+            }
             DL_DELETE(pattern[i], elt);
+            free(elt);
         }
     }
 }
@@ -928,12 +992,15 @@ int read_log_from_file(char *filepath, int num_file)
     
     // init fileinfo struct array
     fileinfo = malloc(sizeof(File_info) * MAX_FILE_PER_LOG);
+    memset(fileinfo, 0, sizeof(File_info) * MAX_FILE_PER_LOG);
     
     // init datasetinfo struct array
     datasetinfo = malloc(sizeof(Dataset_info) * MAX_DATASET_PER_LOG);
+    memset(datasetinfo, 0, sizeof(Dataset_info) * MAX_DATASET_PER_LOG);
     
     // init selectioninfo struct array
     selectioninfo = malloc(sizeof(Selection_info) * MAX_SELECTION_PER_LOG);
+    memset(selectioninfo, 0, sizeof(Selection_info) * MAX_SELECTION_PER_LOG);
 
     cur_fileid      = 0;
     cur_datasetid   = 0;
@@ -945,8 +1012,6 @@ int read_log_from_file(char *filepath, int num_file)
         validgetspace   = 0;
 
         // print progress
-        printf("Processing %s\n", filename);
-
         sprintf(filename, "%s/log.%d", filepath, i);
 
         FILE *fp = fopen(filename, "r");
