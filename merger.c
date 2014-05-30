@@ -109,7 +109,8 @@ typedef struct h5dread {
 
 H5dread* read[MAX_DATASET_PER_LOG];
 
-H5dread* pattern[MAX_DATASET_PER_LOG];
+H5dread* local_pattern[MAX_DATASET_PER_LOG];
+H5dread* global_pattern[MAX_DATASET_PER_LOG];
 
 int parse_create(char* line, Dataset_info* datasetinfo)
 {
@@ -490,27 +491,6 @@ int parse_hyperslab(char* line, Selection_info* selectioninfo)
     return 0;
 }
 
-void print_read()
-{
-
-    int i;
-    H5dread* elt;
-
-    for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
-        if(read[i] == NULL)
-            break;
-
-        printf("\n%s\n", read[i]->selection_info.name);
-        DL_FOREACH(read[i],elt){
-            if(elt == NULL)
-                break;
-            print_selectioninfo(&(elt->selection_info), 1);
-            printf("\t\t%f\n", elt->read_time);
-        }
-    }
-
-}
-
 int get_stat(double* stat, int dataset_id)
 {
 
@@ -528,7 +508,7 @@ int get_stat(double* stat, int dataset_id)
         dim = elt->selection_info.dim;
         blk_size = 1.0;
         for(i = 0; i< dim; i++) {
-            blk_size *= elt->selection_info.block[i];
+            blk_size *= (elt->selection_info.block[i]*elt->selection_info.count[i]);
         }
 
         if(blk_size > max)
@@ -553,43 +533,26 @@ int get_stat(double* stat, int dataset_id)
 }
 
 
-void print_pattern()
+void print_read()
 {
 
     int i;
-    double stat[3];
     H5dread* elt;
-    Pid_list* pidlist;
-
-    printf("\nFile/dataset name\nSelector\tRegion\t\tInvolved processes\tTotal time\tRepeat time\t[Min, Mean, Max size (Byte)]:\n");
 
     for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
-        if(pattern[i] == NULL)
+        if(read[i] == NULL)
             break;
 
-        printf("\n%s\n", pattern[i]->selection_info.name);
-        DL_FOREACH(pattern[i],elt){
+        printf("\n%s\n", read[i]->selection_info.name);
+        DL_FOREACH(read[i],elt){
             if(elt == NULL)
                 break;
             print_selectioninfo(&(elt->selection_info), 1);
-            
-            // print pids
-            // sort first
-            DL_SORT(elt->pids, cmp_pid);
-            printf("\t [");
-            DL_FOREACH(elt->pids, pidlist)
-                printf(" %d",pidlist->pid);
-            printf(" ]\t %f \t %d", elt->read_time, elt->repeat_time);
-
-            // get max, min, mean
-            get_stat(stat, i);
-            printf("\t[%.1f %.1f %.1f]\n",stat[0], stat[1], stat[2]);
+            printf("\t\t%f\n", elt->read_time);
         }
     }
 
-
 }
-
 
 int print_selectioninfo(Selection_info* selectioninfo, int num)
 {
@@ -608,33 +571,33 @@ int print_selectioninfo(Selection_info* selectioninfo, int num)
             dim = selectioninfo[i].dim;
             for(j = 0; j < dim; j++) {
                 if(j==0)
-                    printf("%llu", selectioninfo[i].start[j]);
+                    printf("%8llu", selectioninfo[i].start[j]);
                 else
-                    printf(",%llu", selectioninfo[i].start[j]);
+                    printf(",%8llu", selectioninfo[i].start[j]);
             }
-            printf("},{");
+            printf("} , {");
             
             for(j = 0; j < dim; j++) {
                 if(j==0)
-                    printf("%llu", selectioninfo[i].stride[j]);
+                    printf("%8llu", selectioninfo[i].stride[j]);
                 else
-                    printf(",%llu", selectioninfo[i].stride[j]);
+                    printf(",%8llu", selectioninfo[i].stride[j]);
             }
-            printf("},{");
+            printf("} , {");
 
             for(j = 0; j < dim; j++) {
                 if(j==0)
-                    printf("%llu", selectioninfo[i].count[j]);
+                    printf("%8llu", selectioninfo[i].count[j]);
                 else
-                    printf(",%llu", selectioninfo[i].count[j]);
+                    printf(",%8llu", selectioninfo[i].count[j]);
             }
-            printf("},{");
+            printf("} , {");
  
             for(j = 0; j < dim; j++) {
                 if(j==0)
-                    printf("%llu", selectioninfo[i].block[j]);
+                    printf("%8llu", selectioninfo[i].block[j]);
                 else
-                    printf(",%llu", selectioninfo[i].block[j]);
+                    printf(",%8llu", selectioninfo[i].block[j]);
             }
             printf("}");
         }
@@ -642,6 +605,66 @@ int print_selectioninfo(Selection_info* selectioninfo, int num)
     }
 
     return 0;
+}
+
+
+void print_pattern()
+{
+
+    int i;
+    double stat[3];
+    H5dread* elt;
+    Pid_list* pidlist;
+
+    printf("\nFile/dataset name\n[Proc]\tSelector\t\t\tRegion\t\t\t\tTotal time  Repeat time  [Min, Mean, Max elem]\n");
+
+    printf("\nLocal Pattern");
+    for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
+        if(local_pattern[i] == NULL)
+            break;
+
+        printf("\n%s\n", local_pattern[i]->selection_info.name);
+        DL_FOREACH(local_pattern[i],elt){
+            if(elt == NULL)
+                break;
+            printf("[%d]: ", elt->pid);
+            print_selectioninfo(&(elt->selection_info), 1);
+            printf("\t %f \t %d", elt->read_time, elt->repeat_time);
+
+            // get max, min, mean
+            get_stat(stat, i);
+            printf("\t[ %.0f %.0f %.0f ]\n",stat[0], stat[1], stat[2]);
+        }
+    }
+
+
+    printf("\nGlobal Pattern");
+    for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
+        if(global_pattern[i] == NULL)
+            break;
+
+        printf("\n%s\n", global_pattern[i]->selection_info.name);
+        DL_FOREACH(global_pattern[i],elt){
+            if(elt == NULL)
+                break;
+            DL_SORT(elt->pids, cmp_pid);
+            printf("[");
+            DL_FOREACH(elt->pids, pidlist)
+                printf(" %d",pidlist->pid);
+            printf(" ]:\t");
+
+            print_selectioninfo(&(elt->selection_info), 1);
+            
+            printf("\t %f \t %d", elt->read_time, elt->repeat_time);
+
+            // print pids
+            // sort first
+            // get max, min, mean
+            get_stat(stat, i);
+            printf("\t[ %.0f %.0f %.0f ]\n",stat[0], stat[1], stat[2]);
+        }
+    }
+
 }
 
 int parse_read(char* line, Selection_info* selectioninfo, int pid)
@@ -758,7 +781,7 @@ int cmp_pid(Pid_list* a, Pid_list* b)
 }
 
 
-int merge_read()
+int merge_read(char pattern_type)
 {
     int i, j, k, dim, checkmark, flag;
     H5dread* elt;
@@ -803,6 +826,12 @@ int merge_read()
             checkmark = 0;
 
             while(elt_n != NULL){
+
+            
+                if(pattern_type == 'L' && elt_n->pid != elt->pid) {
+                    elt_n = elt_n->next;
+                    continue;
+                }
 
                 if(checkmark >= dim )
                     break;
@@ -864,7 +893,12 @@ int merge_read()
 
         
             // check for repeat
-            elt_r = pattern[i];
+            
+            if(pattern_type == 'G')
+                elt_r = global_pattern[i];
+            else
+                elt_r = local_pattern[i];
+            
             while(elt_r != NULL) {
           
                 if(cmp_pattern(elt_r, tmp) == 1) {
@@ -876,9 +910,14 @@ int merge_read()
                 elt_r = elt_r->next;
             }
 
-            if(elt_r == NULL)
-                DL_APPEND(pattern[i], tmp);
+            if(elt_r == NULL) {
+             
+                if(pattern_type == 'G')
+                    DL_APPEND(global_pattern[i], tmp);
+                else    
+                    DL_APPEND(local_pattern[i], tmp);
 
+            }
             elt = elt->next;
 
         } // while elt = read[i]
@@ -950,10 +989,24 @@ void init_pattern()
 {
     int i;
     for(i = 0; i < MAX_DATASET_PER_LOG; i++)
-        pattern[i] = NULL;
+        global_pattern[i] = NULL;
 
 }
 
+void clear_merged_flag()
+{
+    int i;
+    H5dread* iter;
+    for (i = 0; i < MAX_DATASET_PER_LOG; i++) {
+        iter = read[i];
+        while(iter != NULL) {
+            iter->merged = 0;
+            iter = iter->next;
+
+        }
+    }
+
+}
 void free_pattern()
 {
     int i;
@@ -963,15 +1016,29 @@ void free_pattern()
     Pid_list* pid_tmp;
 
     for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
-        if(pattern[i] == NULL)
+        if(local_pattern[i] == NULL)
             break;
-        DL_FOREACH_SAFE(pattern[i],elt,tmp) {
+        DL_FOREACH_SAFE(local_pattern[i],elt,tmp) {
         
             DL_FOREACH_SAFE(elt->pids, pid_elt,pid_tmp) {
                 DL_DELETE(elt->pids, pid_elt);
                 free(pid_elt);
             }
-            DL_DELETE(pattern[i], elt);
+            DL_DELETE(local_pattern[i], elt);
+            free(elt);
+        }
+    }
+
+    for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
+        if(global_pattern[i] == NULL)
+            break;
+        DL_FOREACH_SAFE(global_pattern[i],elt,tmp) {
+        
+            DL_FOREACH_SAFE(elt->pids, pid_elt,pid_tmp) {
+                DL_DELETE(elt->pids, pid_elt);
+                free(pid_elt);
+            }
+            DL_DELETE(global_pattern[i], elt);
             free(elt);
         }
     }
@@ -1067,8 +1134,10 @@ int read_log_from_file(char *filepath, int num_file)
         DL_SORT(read[i], cmp_read);
     }
 
-    merge_read();
-    print_pattern(read);
+    merge_read('L');
+    clear_merged_flag();
+    merge_read('G');
+    print_pattern();
     //print_read(read);
     printf("\n");
     
