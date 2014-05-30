@@ -869,6 +869,7 @@ int merge_read()
           
                 if(cmp_pattern(elt_r, tmp) == 1) {
                     elt_r->repeat_time++;
+                    elt_r->read_time += tmp->read_time;
                     free(tmp);
                     break;
                 }
