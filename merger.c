@@ -901,7 +901,8 @@ int merge_read(char pattern_type)
             
             while(elt_r != NULL) {
           
-                if(cmp_pattern(elt_r, tmp) == 1) {
+                if(cmp_pattern(elt_r, tmp) == 1 && elt_r->pid == tmp->pid) {
+
                     elt_r->repeat_time++;
                     elt_r->read_time += tmp->read_time;
                     free(tmp);
@@ -1129,13 +1130,13 @@ int read_log_from_file(char *filepath, int num_file)
     } // end reading from one log file
  
 
-    // HTEST: print all parsed info from one file (proc)
+    merge_read('L');
+    clear_merged_flag();
+ 
     for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
         DL_SORT(read[i], cmp_read);
     }
 
-    merge_read('L');
-    clear_merged_flag();
     merge_read('G');
     print_pattern();
     //print_read(read);
