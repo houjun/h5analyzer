@@ -370,12 +370,12 @@ int parse_hyperslab(char* line, Selection_info* selectioninfo)
     if(validselect < 1)
         return -1;
     
-    // first find out the dimension by counting "," between first {} 
+    // first find out the dimension by counting ";" between first {} 
     dim = 1;
     for(i = 0; line[i]; i++) {
         if(line[i] == '{') {
             while(line[i] != '}')  {
-                if(line[i] == ',')                
+                if(line[i] == ';')                
                     dim++;
                 i++;
             }
