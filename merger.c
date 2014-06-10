@@ -25,8 +25,9 @@ int validgetspace;
 
 typedef struct file_info {
     int         valid;
-    char        filename[FILE_PATH_LEN];
     uint64_t    file_id;
+    char        filename[FILE_PATH_LEN];
+    char        username[FILE_PATH_LEN];
 } File_info;
 
 typedef struct dataset_info {
@@ -42,9 +43,9 @@ typedef struct dataset_info {
     char        open_op[OP_NAME_LEN];
     uint64_t    loc_id;
     char        name[FILE_PATH_LEN];    // including /path/to/file/
+    char        username[FILE_PATH_LEN];
     uint64_t    dapl_id;                // only used for H5Dopen2
     double      open_time;
-
 
 } Dataset_info;
 
@@ -54,10 +55,10 @@ typedef struct selection_info {
     //Dataset_info*  datasetinfo_ptr;
 
     char        name[FILE_PATH_LEN];    // /path/to/file/dataset_name
+    char        username[FILE_PATH_LEN];
 
     // KEY: return value of H5Dget_space() & parameter of H5Sselect_*
     uint64_t    space_id;
-
 
     // H5Sselect_*
     double      walltime;               // actually no use, see read_time
@@ -138,7 +139,6 @@ int parse_create(char* line, Dataset_info* datasetinfo)
 
 int parse_open(char* line, File_info* fileinfo, Dataset_info* datasetinfo)
 {
-
     // hid_t H5Dopen2( hid_t loc_id, const char *name, hid_t dapl_id )
     // e.g. 1400716016.54314 H5Dopen2 (16777216,/Step#0/Energy,0) $83886080$ 0.10009
 
@@ -170,6 +170,13 @@ int parse_open(char* line, File_info* fileinfo, Dataset_info* datasetinfo)
         pch = strtok(NULL, " ");
         fileinfo[cur_fileid].file_id = strtoull(pch, &pend ,10);
 
+        // skip time
+        pch = strtok(NULL, " ");
+        // user name
+        pch = strtok(NULL, "\n");
+        strcpy(fileinfo[cur_fileid].username, pch);
+
+
         // set current file as valid
         // invilidate after closing this file
         fileinfo[cur_fileid].valid = 1;
@@ -194,6 +201,7 @@ int parse_open(char* line, File_info* fileinfo, Dataset_info* datasetinfo)
         }
 
         strcpy(datasetinfo[id].name, fileinfo[i].filename);
+        strcpy(datasetinfo[id].username, fileinfo[i].username);
 
         if(strcmp(tmp_char,"H5Dopen2") == 0) {
         
@@ -217,10 +225,11 @@ int parse_open(char* line, File_info* fileinfo, Dataset_info* datasetinfo)
     // set dataset valid
     datasetinfo[id].valid = 1;
 
+    // dataset ID
     pch = strtok(NULL, " ");
     datasetinfo[id].dataset_id = strtoull(pch, &pend ,10);
 
-
+    // open time
     pch = strtok(NULL, "\n");
     datasetinfo[id].open_time = atof(pch);
 
@@ -279,15 +288,11 @@ int parse_close(char* line, File_info* fileinfo, Dataset_info* datasetinfo)
 
 
     return 0;
-
-
 }
 
 int parse_get_space(char* line, Selection_info* selectioninfo, Dataset_info* datasetinfo)
 {
-
-    // hid_t H5Dopen2( hid_t loc_id, const char *name, hid_t dapl_id )
-    // e.g. 1400716016.54314 H5Dopen2 (16777216,/Step#0/Energy,0) $83886080$ 0.10009
+    //hid_t H5Dget_space( hid_t dataset_id )
 
     int i;
     char* pch;  // parsed token
@@ -334,6 +339,8 @@ int parse_get_space(char* line, Selection_info* selectioninfo, Dataset_info* dat
 
     strcpy(selectioninfo[id].name, datasetinfo[i].name);
 
+    strcpy(selectioninfo[id].username, datasetinfo[i].username);
+
 
     pch = strtok(NULL, " ");
     selectioninfo[id].space_id = strtoull(pch, &pend ,10);
@@ -342,6 +349,7 @@ int parse_get_space(char* line, Selection_info* selectioninfo, Dataset_info* dat
     pch = strtok(NULL, "\n");
     // omit time
 
+    pch = strtok(NULL, "\n");
 
     cur_selectionid++;
 
@@ -351,7 +359,6 @@ int parse_get_space(char* line, Selection_info* selectioninfo, Dataset_info* dat
 
 int parse_hyperslab(char* line, Selection_info* selectioninfo)
 {
-
     // record format
     // 1400615595.22573 H5Sselect_hyperslab (67110121,H5S_SELECT_SET,
     //      {1835008,...},{32768,...},{1,...},{32768, ...}) 0 0.00000
@@ -493,7 +500,6 @@ int parse_hyperslab(char* line, Selection_info* selectioninfo)
 
 int get_stat(double* stat, int dataset_id)
 {
-
     H5dread* elt;
     int i, dim, count;
     double min, max, mean, blk_size;
@@ -529,13 +535,11 @@ int get_stat(double* stat, int dataset_id)
     stat[2] = max;
 
     return 0;
-
 }
 
 
 void print_read()
 {
-
     int i;
     H5dread* elt;
 
@@ -551,7 +555,6 @@ void print_read()
             printf("\t\t%f\n", elt->read_time);
         }
     }
-
 }
 
 int print_selectioninfo(Selection_info* selectioninfo, int num)
@@ -610,13 +613,12 @@ int print_selectioninfo(Selection_info* selectioninfo, int num)
 
 void print_pattern()
 {
-
     int i;
     double stat[3];
     H5dread* elt;
     Pid_list* pidlist;
 
-    printf("\nFile/dataset name\n[Proc]\tSelector\t\t\tRegion\t\t\t\tTotal time  Repeat time  [Min, Mean, Max elem]\n");
+    printf("\nFile/dataset name\n[Proc]\tSelector\t\t\tRegion\t\t\t\tTotal time  Repeat time  [Min, Mean, Max elem]\tusername\n");
 
     printf("\nLocal Pattern");
     for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
@@ -633,7 +635,7 @@ void print_pattern()
 
             // get max, min, mean
             get_stat(stat, i);
-            printf("\t[ %.0f %.0f %.0f ]\n",stat[0], stat[1], stat[2]);
+            printf("\t[ %.0f %.0f %.0f ] \t %s\n",stat[0], stat[1], stat[2], elt->selection_info.username);
         }
     }
 
@@ -661,10 +663,9 @@ void print_pattern()
             // sort first
             // get max, min, mean
             get_stat(stat, i);
-            printf("\t[ %.0f %.0f %.0f ]\n",stat[0], stat[1], stat[2]);
+            printf("\t[ %.0f %.0f %.0f ] \t %s\n",stat[0], stat[1], stat[2], elt->selection_info.username);
         }
     }
-
 }
 
 int parse_read(char* line, Selection_info* selectioninfo, int pid)
@@ -760,12 +761,10 @@ int parse_read(char* line, Selection_info* selectioninfo, int pid)
 
 int cmp_read(H5dread* a, H5dread* b)
 {
-
     if(a->selection_info.start[0] == b->selection_info.start[0])
         return 0;
     else
         return a->selection_info.start[0] < b->selection_info.start[0] ? -1 : 1;
-
 }
 
 int cmp_pid(Pid_list* a, Pid_list* b)
@@ -969,14 +968,12 @@ int cmp_pattern(H5dread* x, H5dread* y)
 
 
     return 1;
-
 }
 void init_read()
 {
     int i;
     for(i = 0; i < MAX_DATASET_PER_LOG; i++)
         read[i] = NULL;
-
 }
 
 void free_read()
@@ -1001,7 +998,6 @@ void init_pattern()
     int i;
     for(i = 0; i < MAX_DATASET_PER_LOG; i++)
         global_pattern[i] = NULL;
-
 }
 
 void clear_merged_flag()
@@ -1166,12 +1162,10 @@ int read_log_from_file(char *filepath, int num_file)
 void print_usage()
 {
     printf("Usage:\n ./merger /path/to/file #file");
-
 }
 
 int main(int argc, char* argv[])
 {
-
     char *filepath;
     int num_file;
     int i, j, k;
