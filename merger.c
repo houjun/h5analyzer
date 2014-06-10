@@ -901,7 +901,17 @@ int merge_read(char pattern_type)
             
             while(elt_r != NULL) {
           
-                if(cmp_pattern(elt_r, tmp) == 1 && elt_r->pid == tmp->pid) {
+                if(cmp_pattern(elt_r, tmp) == 1) {
+
+                    if(pattern_type == 'L' && elt_r->pid != tmp->pid) {
+                        elt_r = elt_r->next;
+                        continue;
+                    }
+                    else if(pattern_type == 'G' && elt_r->pid != tmp->pid) {
+                        tmp_pid = (Pid_list*)malloc(sizeof(Pid_list));
+                        tmp_pid->pid = tmp->pid;
+                        DL_APPEND(elt_r->pids, tmp_pid);
+                    }
 
                     elt_r->repeat_time++;
                     elt_r->read_time += tmp->read_time;
