@@ -622,7 +622,7 @@ void print_pattern()
     H5dread* elt;
     Pid_list* pidlist;
 
-    printf("\nFile/dataset name\n[Proc]\tSelector\t\t\tRegion\t\t\t\tTotal time  Repeat time  [Min, Mean, Max elem]\tusername\n");
+    printf("\nFile/dataset name\n[Proc]\tSelector\t\t\tRegion\t\t\t\tTotal time  Repeat time  [Min, Mean, Max elem]\n");
 
     printf("\nLocal Pattern");
     for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
@@ -633,13 +633,13 @@ void print_pattern()
         DL_FOREACH(local_pattern[i],elt){
             if(elt == NULL)
                 break;
-            printf("[%d]: ", elt->pid);
+            printf("[ %s - %d ]: ",elt->selection_info.username, elt->pid);
             print_selectioninfo(&(elt->selection_info), 1);
             printf("\t %f \t %d", elt->read_time, elt->repeat_time);
 
             // get max, min, mean
             get_stat(stat, i);
-            printf("\t[ %.0f %.0f %.0f ] \t %s\n",stat[0], stat[1], stat[2], elt->selection_info.username);
+            printf("\t[ %.0f %.0f %.0f ]\n",stat[0], stat[1], stat[2]);
         }
     }
 
@@ -654,7 +654,7 @@ void print_pattern()
             if(elt == NULL)
                 break;
             DL_SORT(elt->pids, cmp_pid);
-            printf("[");
+            printf("[ %s -",elt->selection_info.username);
             DL_FOREACH(elt->pids, pidlist)
                 printf(" %d",pidlist->pid);
             printf(" ]:\t");
@@ -667,7 +667,7 @@ void print_pattern()
             // sort first
             // get max, min, mean
             get_stat(stat, i);
-            printf("\t[ %.0f %.0f %.0f ] \t %s\n",stat[0], stat[1], stat[2], elt->selection_info.username);
+            printf("\t[ %.0f %.0f %.0f ]\n",stat[0], stat[1], stat[2]);
         }
     }
 }
@@ -845,9 +845,11 @@ int merge_read(char pattern_type)
 
             tmp->prev = NULL;
             tmp->next = NULL;
-            tmp->repeat_time = 1;
             tmp->merged = 0;
             tmp->pids = NULL;
+
+            if(pattern_type == 'L')
+                tmp->repeat_time = 1;
 
             tmp_pid = (Pid_list*)malloc(sizeof(Pid_list));
             tmp_pid->pid = tmp->pid;
@@ -1058,9 +1060,9 @@ void free_pattern()
 }
 
 
-int read_log_from_file(char *filepath, int num_file)
+int read_log_from_file(int num_file, char* argv[])
 {
-    int i;
+    int i, j, log_per_dir;
     char filename[FILE_PATH_LEN];
     char tmp_line[LINE_MAX_LEN];
 
@@ -1087,67 +1089,75 @@ int read_log_from_file(char *filepath, int num_file)
     cur_datasetid   = 0;
     cur_selectionid = 0;
 
-    // iterate all files
-    for(i = 0; i < num_file; i++) {
-        validselect     = 0;
-        validgetspace   = 0;
+    for (j = 0; j < num_file; j++) {
+        
+        log_per_dir = atoi(argv[3 + j*2]);
+        // iterate all files
+        for(i = 0; i < log_per_dir; i++) {
+            validselect     = 0;
+            validgetspace   = 0;
 
-        // print progress
-        sprintf(filename, "%s/log.%d", filepath, i);
+            // print progress
+            sprintf(filename, "%s/log.%d", argv[2 + j*2], i);
 
-        FILE *fp = fopen(filename, "r");
-        if (fp == NULL) {
-            printf("Error opening file %s", filename);
-            return -1;
-        }
+            FILE *fp = fopen(filename, "r");
+            if (fp == NULL) {
+                printf("Error opening file %s", filename);
+                return -1;
+            }
 
-    
-        // start parsing log
-        while(fgets(tmp_line, LINE_MAX_LEN, fp) != NULL ) {
+        
+            // start parsing log
+            while(fgets(tmp_line, LINE_MAX_LEN, fp) != NULL ) {
  
-            if(strstr(tmp_line, "open") != NULL) {
+                if(strstr(tmp_line, "open") != NULL) {
 
-                parse_open(tmp_line, fileinfo, datasetinfo);
+                    parse_open(tmp_line, fileinfo, datasetinfo);
 
-            }
-            else if(strstr(tmp_line, "H5Dcreate1") != NULL || strstr(tmp_line, "H5Dcreate2") != NULL) {
+                }
+                else if(strstr(tmp_line, "H5Dcreate1") != NULL || strstr(tmp_line, "H5Dcreate2") != NULL) {
 
-                parse_create(tmp_line, datasetinfo);
+                    parse_create(tmp_line, datasetinfo);
 
-            }
-            else if(strstr(tmp_line, "H5Dget_space") != NULL) {
+                }
+                else if(strstr(tmp_line, "H5Dget_space") != NULL) {
 
-                parse_get_space(tmp_line, selectioninfo, datasetinfo);
+                    parse_get_space(tmp_line, selectioninfo, datasetinfo);
 
-            }
-            else if(strstr(tmp_line, "H5Sselect_hyperslab") != NULL) {
-                
-                parse_hyperslab(tmp_line, selectioninfo); 
+                }
+                else if(strstr(tmp_line, "H5Sselect_hyperslab") != NULL) {
+                    
+                    parse_hyperslab(tmp_line, selectioninfo); 
 
-            }
-            else if((strstr(tmp_line, "H5Dread") != NULL)) {
+                }
+                else if((strstr(tmp_line, "H5Dread") != NULL)) {
 
-                parse_read(tmp_line,selectioninfo, i);
+                    parse_read(tmp_line,selectioninfo, i);
 
-            }
-            else if((strstr(tmp_line, "H5Fclose") != NULL)) {
+                }
+                else if((strstr(tmp_line, "H5Fclose") != NULL)) {
 
-                parse_close(tmp_line, fileinfo, datasetinfo);
+                    parse_close(tmp_line, fileinfo, datasetinfo);
 
-            }
+                }
 
-        } // within a log file
-       
-        fclose(fp);
-    } // end reading from one log file
+            } // within a log file
+           
+            fclose(fp);
+        } // end reading from one log file
  
 
+    }
     merge_read('L');
     clear_merged_flag();
  
     for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
         DL_SORT(read[i], cmp_read);
     }
+    for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
+        DL_SORT(local_pattern[i], cmp_read);
+    }
+
 
     merge_read('G');
     print_pattern();
@@ -1167,7 +1177,7 @@ int read_log_from_file(char *filepath, int num_file)
 }
 void print_usage()
 {
-    printf("Usage:\n ./merger /path/to/file #file");
+    printf("Usage:\n ./merger #path /path/to/file1 #file1 /path/to/file2 #file2 ...\n");
 }
 
 int main(int argc, char* argv[])
@@ -1179,19 +1189,18 @@ int main(int argc, char* argv[])
 
 
     // argc check
-    if(argc != 3) {
+    if(argc % 2 != 0) {
         print_usage();
         return -1;
     }
 
 
     // parse argv
-    filepath = argv[1];
-    num_file = atoi(argv[2]);
+    num_file = atoi(argv[1]);
 
 
     // read log and parse
-    read_log_from_file(filepath, num_file);
+    read_log_from_file(num_file, argv);
 
 
 
