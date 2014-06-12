@@ -24,13 +24,16 @@ int validgetspace;
 
 
 typedef struct file_info {
+
     int         valid;
     uint64_t    file_id;
     char        filename[FILE_PATH_LEN];
     char        username[FILE_PATH_LEN];
+
 } File_info;
 
 typedef struct dataset_info {
+    
     // hid_t H5Dopen1( hid_t loc_id, const char *name )
     // hid_t H5Dopen2( hid_t loc_id, const char *name, hid_t dapl_id )
     // -Returns a dataset identifier if successful
@@ -165,6 +168,7 @@ int parse_open(char* line, File_info* fileinfo, Dataset_info* datasetinfo)
         pch++;      // skip"("
         strcpy(fileinfo[cur_fileid].filename, pch);
 
+        pch = strtok(NULL, ",");
         pch = strtok(NULL, ")");
 
         pch = strtok(NULL, " ");
@@ -319,7 +323,7 @@ int parse_get_space(char* line, Selection_info* selectioninfo, Dataset_info* dat
 
     // now search datasetinfo to match dataset_id
     found_match = 0;
-    for(i = 0; i < cur_datasetid; i++) {
+    for(i = cur_datasetid - 1; i >= 0 ; i--) {
         if(datasetinfo[i].dataset_id == dataset_id) {
             if(datasetinfo[i].valid < 1) {
                 validselect = 0;
@@ -779,6 +783,36 @@ int cmp_pid(Pid_list* a, Pid_list* b)
     return 0;
 }
 
+int cmp_pattern(H5dread* x, H5dread* y)
+{
+    int dim, i;
+
+    Selection_info* a = &x->selection_info;
+    Selection_info* b = &y->selection_info;
+
+    if(a->dim != b->dim)
+        return 0;
+
+    dim = a->dim;
+
+    if(a->select_type != b->select_type) 
+        return 0;
+
+    if(a->select_type == 'H') {
+        for(i = 0; i < dim; i++) {
+            if( (a->start[i] != b->start[i]) || (a->stride[i] != b->stride[i]) ||
+                    (a->count[i] != b->count[i]) || (a->block[i] != b->block[i])) {
+
+                return 0;
+            }
+
+        }
+
+    }
+
+
+    return 1;
+}
 
 int merge_read(char pattern_type)
 {
@@ -795,7 +829,10 @@ int merge_read(char pattern_type)
     for(i = 0; i < MAX_DATASET_PER_LOG; i++) {
     // within one dataset
     
-        elt = read[i];
+        if(pattern_type == 'G')
+            elt = local_pattern[i];
+        else
+            elt = read[i];
 
         while(elt != NULL) {
             if(elt->merged == 1) {
@@ -810,12 +847,11 @@ int merge_read(char pattern_type)
             tmp->next = NULL;
             tmp->repeat_time = 1;
             tmp->merged = 0;
+            tmp->pids = NULL;
 
-                            
             tmp_pid = (Pid_list*)malloc(sizeof(Pid_list));
             tmp_pid->pid = tmp->pid;
             DL_APPEND(tmp->pids, tmp_pid);
-            
 
             elt_n = elt->next;
 
@@ -939,36 +975,6 @@ int merge_read(char pattern_type)
     return 0;
 }
 
-int cmp_pattern(H5dread* x, H5dread* y)
-{
-    int dim, i;
-
-    Selection_info* a = &x->selection_info;
-    Selection_info* b = &y->selection_info;
-
-    if(a->dim != b->dim)
-        return 0;
-
-    dim = a->dim;
-
-    if(a->select_type != b->select_type) 
-        return 0;
-
-    if(a->select_type == 'H') {
-        for(i = 0; i < dim; i++) {
-            if( (a->start[i] != b->start[i]) || (a->stride[i] != b->stride[i]) ||
-                    (a->count[i] != b->count[i]) || (a->block[i] != b->block[i])) {
-
-                return 0;
-            }
-
-        }
-
-    }
-
-
-    return 1;
-}
 void init_read()
 {
     int i;
